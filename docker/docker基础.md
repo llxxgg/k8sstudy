@@ -165,6 +165,7 @@ Dockerfile中每个指令都会生成一个新的image层。
 > 最后，通过execv()系统调用，让应用进程取代自己，成为容器里的PID=1的进程。
 
 总结，挂载Volume过程：
+
 1. 启动容器进程
 2. 准备rootfs：将容器镜像的各层文件挂载到 /var/lib/docker/aufs/mnt/目录上
 3. 挂载volume目录：将声明的volume目录挂载到/var/lib/docker/aufs/mnt/[ID]/test目录上中
@@ -181,6 +182,47 @@ Dockerfile中每个指令都会生成一个新的image层。
 
 docker commit，发生在宿主机空间的。而由于 Mount Namespace 的隔离作用，宿主机并不知道这个绑定挂载的存在。所以，在宿主机看来，容器中可读写层的 /test 目录（/var/lib/docker/aufs/mnt/[可读写层 ID]/test），始终是空的。
 
-如果你执行 docker run -v /home:/test 的时候，容器镜像里的 /test 目录下本来就有内容的话，你会发现，在宿主机的 /home 目录下，也会出现这些内容。这是怎么回事？为什么它们没有被绑定挂载隐藏起来呢？
+Docker提供了三种方式将数据从宿主机挂载到容器中：volume、bind mount、tmpfs。
 
-Docker 的“copyData”功能，可以使挂载点文件和挂载目录下的文件同时存在。
+* volume 新建宿主机文件目录，默认情况下统一的父路径是/var/lib/docker/volumes/
+* bind mount：将文件存储在宿主机文件系统的任何路径
+* tmpfs 只存储在宿主机的内存中，不会写入到宿主机文件系统中，不会持久化存储。
+
+```shell
+# tmpfs
+docker run -d --tmpfs /tmp ubuntu:latest sleep 3600
+```
+
+```shell
+# bind mount
+docker run -d --mount type=bind,source=/home,target=/test,readonly myubuntu:v1 sleep 3600
+```
+
+将宿主机/home目录以bind mount的形式挂载到容器的/test，只读方式。--mount以键值对的方式传参，比-v提供了更多的选项。
+
+`docker inspect 98e603419db09c7a0640966959f83c4cda91c40b9283a2fdbce7ff91b60215f6`
+
+![1696813399980](image/docker基础/1696813399980.png)
+
+![1696813429987](image/docker基础/1696813429987.png)
+
+```shell
+# 创建数据卷
+docker volume create test_volume
+
+# 查看数据卷
+docker volume ls
+docker volume inspect test_volume
+
+# 使用数据卷
+docker run -d -v test_volume:/test myubuntu:v1 sleep 3600
+```
+
+使用volume的好处：在容器第一次启动的时候，它会将容器内的映射路径下的文件复制到宿主机上保存。
+
+> 如何销毁Volume？ 销毁Volume的前提是没有容器使用它，可以使用docker volume rm命令进行删除。
+
+volume与bind mount的区别
+
+![1696814187693](image/docker基础/1696814187693.png)
+
