@@ -13,7 +13,7 @@ Swarm无法成长起来的重要原因：一旦到了真正的生产环境上，
 
 Pod是如何被创建出来的？
 
-* Pod，其实是一组共享了某些资源的容器。Pod里的所有容器，共享的是同一个Network Namespace，并且可以声明共享同一个Volume。
+* **Pod，其实是一组共享了某些资源的容器。Pod里的所有容器，共享的是同一个Network Namespace，并且可以声明共享同一个Volume**。
 * 在k8s项目里，Pod的实现需要使用一个中间容器，叫做infra容器。在这个Pod中，infra容器永远都是第一个被创建的容器，而其他用户定义的容器，则通过Join Network Namespace的方式，与infra容器关联在一起。
 
 ![](https://static001.geekbang.org/resource/image/8c/cf/8c016391b4b17923f38547c498e434cf.png?wh=490*665)
@@ -91,6 +91,102 @@ Projected Volume：投射数据卷，为容器提供预先定义好的数据
 Secret作用，把Pod想要访问的加密数据，存放到Etcd中。然后就可以通过在Pod的容器里挂载Volume的方式，访问到这些Secret里保存的信息。
 
 可以存放数据库用户名密码等信息。
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecret
+type: Opaque
+data:
+  user: YWRtaW4=
+  pass: MWYyZDFlMmU2N2Rm
+```
+
+data字段，保存的数据必须是经过Base64转码的，而并没有加密。在生产环境中，需要在k8s中开启secret的加密插件，增强数据的安全性。
+
+```shell
+# 进入Pod容器
+kubectl exec -it test-pod-secret -- /bin/sh
+```
+
+进入容器，可以看到，保存在Etcd中的用户名和密码，已经以**文件的形式**出现子容器的volume目录中。一旦对应的Etcd里的数据被更新，这些Volume中的文件内容，同样也会被更新。其实，这是kubelet组件在定时维护这些Volume。（`<font color="red">`kubelet如何维护这些Volume??`</font>`）
+
+需要注意的是，这个更新可能会有一定的延时。
+
+### ConfigMap
+
+它与Secret的区别在于，ConfigMap保存的是不需要加密的、应用所需的配置信息。
+
+```yaml
+apiVersion: v1
+data: 
+  ui.properties: | 
+    color.good=purple 
+    color.bad=yellow 
+    allow.textmode=true 
+    how.nice.to.look=fairlyNice  
+kind: ConfigMap
+metadata: 
+  name: ui-config 
+  ...
+```
+
+### Downward API
+
+它的作用是，让Pod里的容器能够直接获取到这个Pod API对象本身的信息。
+
+需要注意的是，Downward API能够获取到的信息，一定是Pod里的容器进程启动之前就能够确定下来的信息。而如果你想要获取Pod容器运行后才会出现的信息，比如，容器进程的PID，那就肯定不能使用Downward API了，而应该考虑在Pod里定一个一个sidecar容器。
+
+### Service Account
+
+Service Account对象的作用，就是k8s系统内置的一种“服务账户”，它是k8s进行权限分配的对象。比如 Service Account A，可以只被允许对k8s API进行GET操作。
+
+Service Account的授权信息，实际上保存在它所绑定的一个特殊的Secret对象里。这个特殊的Secret，叫做ServiceAccountToken。
+
+任何运行在k8s集群上的应用，都必须使用这个token里保存的授权信息，才可以合法访问API Server。
+
+另外，为了方便使用，k8s已经为你提供了一个默认的“服务账户”（default Service Account）。并且，任何一个运行在k8s里的Pod，都可以直接使用这个默认的Service Account，而无需显示地声明挂载它。
+
+这是如何做到的呢？k8s其实在每个Pod创建的时候，自动在它的spec.volumes部分添加上了磨人ServiceAccountToken的定义，然后自动给每个容器加上了对应的volumeMounts字段。
+
+### 容器健康检查
+
+健康检查探针（livenessProbe）
+
+restartPolicy 容器恢复策略
+
+* Always：在任何情况下，只要容器不在运行状态，就自动重启容器；
+* OnFailure: 只在容器 异常时才自动重启容器；
+* Never: 从来不重启容器。
+* 只要 Pod 的 restartPolicy 指定的策略允许重启异常的容器（比如：Always），那么这个 Pod 就会保持 Running 状态，并进行容器重启。否则，Pod 就会进入 Failed 状态 。
+* 对于包含多个容器的 Pod，只有它里面所有的容器都进入异常状态后，Pod 才会进入 Failed 状态。在此之前，Pod 都是 Running 状态。此时，Pod 的 READY 字段会显示正常容器的个数，
+
+readnessProbe，决定这个Pod是不是能被通过Service的方式访问到。
+
+### Pod预设置
+
+PodPreset: 对Pod进行自动化修改的工具对象。
+
+```yaml
+apiVersion: settings.k8s.io/v1alpha1
+kind: PodPreset
+metadata:
+  name: allow-database
+spec:
+  selector:
+    matchLabels:
+      role: frontend
+  env:
+    - name: DB_PORT
+      value: "6379"
+  volumeMounts:
+    - mountPath: /cache
+      name: cache-volume
+  volumes:
+    - name: cache-volume
+      emptyDir: {}
+```
 
 ## TODO
 
